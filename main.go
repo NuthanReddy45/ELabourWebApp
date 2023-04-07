@@ -9,7 +9,7 @@ import (
 
 func main() {
 
-	fmt.Println("hello world! server is up ")
+	fmt.Println("hello world! server is up")
 	util.ConnectDb()
 
 	r := routes.Router()

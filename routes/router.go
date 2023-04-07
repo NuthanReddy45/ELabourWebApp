@@ -5,12 +5,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"time"
 
+	"github.com/NuthanReddy45/ELabourWebApp/middlewares"
 	"github.com/NuthanReddy45/ELabourWebApp/models"
 	"github.com/NuthanReddy45/ELabourWebApp/util"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var DB *mongo.Collection
@@ -67,7 +72,16 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	curData := models.User{Email: temp.Email, PhnNo: temp.PhnNo, Password: temp.Password1}
+	// hash the password
+
+	hash, errHasing := bcrypt.GenerateFromPassword([]byte(temp.Password1), 10)
+
+	if errHasing != nil {
+		c.String(500, "error in hashing password")
+		return
+	}
+
+	curData := models.User{Email: temp.Email, PhnNo: temp.PhnNo, Password: string(hash)}
 
 	inserted, err := DB.InsertOne(context.Background(), curData, nil)
 
@@ -77,7 +91,27 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	c.String(200, "registration successful  %d", inserted.InsertedID)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": res.ID,
+		"exp": time.Now().Add(time.Hour * 24 * 3).Unix(),
+	})
+
+	// Sign and get the complete encoded token as a string using the secret
+	sec := []byte(os.Getenv("SECRET_KEY"))
+
+	tokenString, err2 := token.SignedString(sec)
+
+	if err2 != nil {
+		c.String(500, "error signing Jwt token")
+		return
+	}
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("Auth", tokenString, 3600*24*3, "", "", false, true)
+
+	c.IndentedJSON(http.StatusOK, gin.H{
+		"Inserted_id": inserted,
+	})
 }
 
 func Login(c *gin.Context) {
@@ -86,7 +120,6 @@ func Login(c *gin.Context) {
 	err := c.ShouldBindJSON(&temp)
 
 	if err != nil {
-		fmt.Println(err)
 		c.IndentedJSON(http.StatusBadRequest, gin.H{
 			"Message": "Bad Request",
 		})
@@ -101,11 +134,31 @@ func Login(c *gin.Context) {
 
 	err = DB.FindOne(context.TODO(), filter, nil).Decode(&res)
 
-	fmt.Println("temp= ", res)
 	if err == nil {
 
-		if res.Password == temp.Password {
-			c.String(200, "Logged in ")
+		err1 := bcrypt.CompareHashAndPassword([]byte(res.Password), []byte(temp.Password))
+
+		if err1 == nil {
+
+			token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+				"sub": res.ID,
+				"exp": time.Now().Add(time.Hour * 24 * 3).Unix(),
+			})
+
+			// Sign and get the complete encoded token as a string using the secret
+			sec := []byte(os.Getenv("SECRET_KEY"))
+
+			tokenString, err2 := token.SignedString(sec)
+
+			if err2 != nil {
+				c.String(500, "error signing Jwt token")
+				return
+			}
+
+			c.SetSameSite(http.SameSiteLaxMode)
+			c.SetCookie("Auth", tokenString, 3600*24*3, "", "", false, true)
+
+			c.IndentedJSON(http.StatusOK, nil)
 			return
 		}
 		c.String(400, "Invalid credits ")
@@ -122,7 +175,8 @@ func Login(c *gin.Context) {
 
 func Router() *gin.Engine {
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(middlewares.CORSMiddleware())
 	r.GET("/", Landing)
 	r.POST("/login", Login)
 	r.POST("/register", Register)
